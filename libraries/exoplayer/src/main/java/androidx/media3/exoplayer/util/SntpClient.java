@@ -43,6 +43,9 @@ public final class SntpClient {
   /** The default NTP host address used to retrieve {@link #getElapsedRealtimeOffsetMs()}. */
   public static final String DEFAULT_NTP_HOST = "time.android.com";
 
+  /** The default NTP pool interval. By default is set to TIME_UNSET, which means that periodic syncronization is disabled. */
+  private static final long DEFAULT_POOL_INTERVAL = C.TIME_UNSET;
+
   /** Callback for calls to {@link #initialize(Loader, InitializationCallback)}. */
   public interface InitializationCallback {
 
@@ -88,6 +91,12 @@ public final class SntpClient {
   @GuardedBy("valueLock")
   private static String ntpHost = DEFAULT_NTP_HOST;
 
+  @GuardedBy("valueLock")
+  private static long poolIntervalMs = DEFAULT_POOL_INTERVAL;
+
+  @GuardedBy("valueLock")
+  private static long lastSyncRealtimeMs;
+
   private SntpClient() {}
 
   /** Returns the NTP host address used to retrieve {@link #getElapsedRealtimeOffsetMs()}. */
@@ -117,6 +126,19 @@ public final class SntpClient {
   }
 
   /**
+   * Sets the pool interval.
+   *
+   * <p>The default is {@link #DEFAULT_POOL_INTERVAL}.
+   *
+   * @param poolIntervalMs The NTP pool interval in milliseconds.
+   */
+  public static void setNtpPoolInterval(long poolIntervalMs) {
+    synchronized (valueLock) {
+      SntpClient.poolIntervalMs = poolIntervalMs;
+    }
+  }
+
+  /**
    * Returns whether the device time offset has already been loaded.
    *
    * <p>If {@code false}, use {@link #initialize(Loader, InitializationCallback)} to start the
@@ -124,7 +146,7 @@ public final class SntpClient {
    */
   public static boolean isInitialized() {
     synchronized (valueLock) {
-      return isInitialized;
+      return isInitialized && (SntpClient.poolIntervalMs == DEFAULT_POOL_INTERVAL || (SystemClock.elapsedRealtime() - lastSyncRealtimeMs < SntpClient.poolIntervalMs));
     }
   }
 
@@ -293,12 +315,13 @@ public final class SntpClient {
       // Synchronized to prevent redundant parallel requests.
       synchronized (loaderLock) {
         synchronized (valueLock) {
-          if (isInitialized) {
+          if (isInitialized && (SntpClient.poolIntervalMs == DEFAULT_POOL_INTERVAL || (SystemClock.elapsedRealtime() - lastSyncRealtimeMs < SntpClient.poolIntervalMs))) {
             return;
           }
         }
         long offsetMs = loadNtpTimeOffsetMs();
         synchronized (valueLock) {
+          lastSyncRealtimeMs = SystemClock.elapsedRealtime();
           elapsedRealtimeOffsetMs = offsetMs;
           isInitialized = true;
         }
